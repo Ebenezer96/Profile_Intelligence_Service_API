@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 import dj_database_url
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -112,3 +115,7 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
     ]
 }
+
+GITHUB_CLIENT_ID = "Ov23liZ719NuUQwOeQP0"
+GITHUB_CLIENT_SECRET = "264dc178f99e7d3e9b51acf8d4cc1e9c95c4aaf6"
+GITHUB_REDIRECT_URI = "http://127.0.0.1:8000/api/v1/auth/github/callback/"
