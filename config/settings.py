@@ -116,6 +116,9 @@ REST_FRAMEWORK = {
     ]
 }
 
-GITHUB_CLIENT_ID = "Ov23liZ719NuUQwOeQP0"
-GITHUB_CLIENT_SECRET = "264dc178f99e7d3e9b51acf8d4cc1e9c95c4aaf6"
-GITHUB_REDIRECT_URI = "http://127.0.0.1:8000/api/v1/auth/github/callback/"
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
+GITHUB_REDIRECT_URI = os.getenv(
+    "GITHUB_REDIRECT_URI",
+    "http://127.0.0.1:8000/api/v1/auth/github/callback/",
+)
