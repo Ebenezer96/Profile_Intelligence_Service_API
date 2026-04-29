@@ -13,19 +13,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv("SECRET_KEY", "unsafe-dev-key")
 DEBUG = os.getenv("DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
-    ".railway.app",
-    ".up.railway.app",
-    ".vercel.app",
-]
+ALLOWED_HOSTS = os.getenv(
+    "ALLOWED_HOSTS",
+    "127.0.0.1,localhost,.railway.app,.up.railway.app,.vercel.app,.onrender.com"
+).split(",")
 
-CSRF_TRUSTED_ORIGINS = [
-    "https://*.railway.app",
-    "https://*.up.railway.app",
-    "https://*.vercel.app",
-]
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    "CSRF_TRUSTED_ORIGINS",
+    "https://*.railway.app,https://*.up.railway.app,https://*.vercel.app,https://*.onrender.com"
+).split(",")
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
@@ -48,7 +44,7 @@ INSTALLED_APPS = [
 ]
 
 # =========================
-# MIDDLEWARE
+# MIDDLEWARE (single block only)
 # =========================
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -60,6 +56,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "profiles.middleware.RequestLoggingMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -140,7 +137,7 @@ APPEND_SLASH = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # =========================
-# DRF SETTINGS (FIXED)
+# DRF SETTINGS
 # =========================
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
@@ -159,23 +156,20 @@ REST_FRAMEWORK = {
 # =========================
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
+
 GITHUB_REDIRECT_URI = os.getenv(
     "GITHUB_REDIRECT_URI",
     "http://127.0.0.1:8000/api/v1/auth/github/callback/",
 )
 
-MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",
-    "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "profiles.middleware.RequestLoggingMiddleware",
-]
+WEB_GITHUB_REDIRECT_URI = os.getenv(
+    "WEB_GITHUB_REDIRECT_URI",
+    "http://127.0.0.1:8000/api/v1/web/auth/github/callback/",
+)
+
+# =========================
+# LOGGING
+# =========================
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
