@@ -1,11 +1,23 @@
 from django.core.paginator import Paginator, EmptyPage
+from django.conf import settings
+from django.http import JsonResponse
+from django.shortcuts import redirect
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import Profile
+from .models import Profile, PlatformUser
 from .serializers import ProfileSerializer, ProfileQuerySerializer
 from .services import parse_natural_language_query
+from .auth_tokens import create_access_token, create_refresh_token, rotate_refresh_token
+from .authentication import JWTAuthentication
+from .permissions import IsAdmin, IsAnalystOrAdmin
+from .web_auth import CookieJWTAuthentication
+
+import urllib.parse
+import requests
+import csv
 
 
 def apply_profile_filters(queryset, params):
@@ -18,6 +30,23 @@ def apply_profile_filters(queryset, params):
     min_country_probability = params.get("min_country_probability")
     sort_by = params.get("sort_by", "created_at")
     order = params.get("order", "desc")
+
+    allowed_sort_fields = [
+        "name",
+        "gender",
+        "age",
+        "age_group",
+        "country_id",
+        "gender_probability",
+        "country_probability",
+        "created_at",
+    ]
+
+    if sort_by not in allowed_sort_fields:
+        sort_by = "created_at"
+
+    if order not in ["asc", "desc"]:
+        order = "desc"
 
     if gender:
         queryset = queryset.filter(gender=gender)
@@ -49,20 +78,27 @@ def paginate_profiles(queryset, page, limit):
 
     try:
         page_obj = paginator.page(page)
+        results = page_obj.object_list
     except EmptyPage:
-        page_obj = []
+        results = []
 
-    data = ProfileSerializer(page_obj, many=True).data
+    data = ProfileSerializer(results, many=True).data
 
     return {
-        "page": page,
-        "limit": limit,
-        "total": paginator.count,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": paginator.count,
+            "pages": paginator.num_pages,
+        },
         "data": data,
     }
 
 
 class ProfileCollectionView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAnalystOrAdmin]
+
     def get(self, request):
         serializer = ProfileQuerySerializer(data=request.query_params)
 
@@ -91,8 +127,12 @@ class ProfileCollectionView(APIView):
 
 
 class ProfileSearchView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAnalystOrAdmin]
+
     def get(self, request):
-        query = request.query_params.get("q", "").strip()
+        query = request.query_params.get("q") or request.query_params.get("query", "")
+        query = query.strip()
 
         if not query:
             return Response(
@@ -102,12 +142,6 @@ class ProfileSearchView(APIView):
 
         parsed_filters = parse_natural_language_query(query)
 
-        if not parsed_filters:
-            return Response(
-                {"status": "error", "message": "Unable to interpret query"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         extra_params = {
             "page": request.query_params.get("page", 1),
             "limit": request.query_params.get("limit", 10),
@@ -115,9 +149,55 @@ class ProfileSearchView(APIView):
             "order": request.query_params.get("order", "desc"),
         }
 
-        merged_params = {**parsed_filters, **extra_params}
+        queryset = Profile.objects.all()
 
-        serializer = ProfileQuerySerializer(data=merged_params)
+        if parsed_filters:
+            merged_params = {**parsed_filters, **extra_params}
+            serializer = ProfileQuerySerializer(data=merged_params)
+
+            if not serializer.is_valid():
+                return Response(
+                    {"status": "error", "message": "Invalid query parameters"},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+
+            params = serializer.validated_data
+            queryset = apply_profile_filters(queryset, params)
+
+        else:
+            serializer = ProfileQuerySerializer(data=extra_params)
+
+            if not serializer.is_valid():
+                return Response(
+                    {"status": "error", "message": "Invalid query parameters"},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+
+            params = serializer.validated_data
+            queryset = queryset.filter(name__icontains=query)
+            queryset = apply_profile_filters(queryset, params)
+
+        page = params.get("page", 1)
+        limit = params.get("limit", 10)
+
+        paginated_result = paginate_profiles(queryset, page, limit)
+
+        return Response(
+            {
+                "status": "success",
+                "query": query,
+                **paginated_result,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ProfileExportView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        serializer = ProfileQuerySerializer(data=request.query_params)
 
         if not serializer.is_valid():
             return Response(
@@ -126,18 +206,318 @@ class ProfileSearchView(APIView):
             )
 
         params = serializer.validated_data
-        page = params.get("page", 1)
-        limit = params.get("limit", 10)
-
         queryset = Profile.objects.all()
         queryset = apply_profile_filters(queryset, params)
 
-        paginated_result = paginate_profiles(queryset, page, limit)
+        response = JsonResponse({}, content_type="text/csv")
+        response.content = b""
+        response["Content-Disposition"] = 'attachment; filename="profiles.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            "id",
+            "name",
+            "gender",
+            "gender_probability",
+            "age",
+            "age_group",
+            "country_id",
+            "country_name",
+            "country_probability",
+            "created_at",
+        ])
+
+        for profile in queryset:
+            writer.writerow([
+                profile.id,
+                profile.name,
+                profile.gender,
+                profile.gender_probability,
+                profile.age,
+                profile.age_group,
+                profile.country_id,
+                getattr(profile, "country_name", ""),
+                profile.country_probability,
+                profile.created_at,
+            ])
+
+        return response
+
+
+def github_login(request):
+    base_url = "https://github.com/login/oauth/authorize"
+
+    redirect_uri = getattr(
+        settings,
+        "GITHUB_REDIRECT_URI",
+        "http://127.0.0.1:8000/api/v1/auth/github/callback/",
+    )
+
+    params = {
+        "client_id": settings.GITHUB_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "scope": "read:user user:email",
+    }
+
+    url = f"{base_url}?{urllib.parse.urlencode(params)}"
+    return redirect(url)
+
+
+def github_callback(request):
+    code = request.GET.get("code")
+
+    if not code:
+        return JsonResponse(
+            {"status": "error", "message": "No code provided"},
+            status=400,
+        )
+
+    token_response = requests.post(
+        "https://github.com/login/oauth/access_token",
+        data={
+            "client_id": settings.GITHUB_CLIENT_ID,
+            "client_secret": settings.GITHUB_CLIENT_SECRET,
+            "code": code,
+        },
+        headers={"Accept": "application/json"},
+        timeout=10,
+    )
+
+    token_data = token_response.json()
+    github_access_token = token_data.get("access_token")
+
+    if not github_access_token:
+        return JsonResponse(
+            {"status": "error", "message": "Failed to get access token"},
+            status=400,
+        )
+
+    user_response = requests.get(
+        "https://api.github.com/user",
+        headers={"Authorization": f"Bearer {github_access_token}"},
+        timeout=10,
+    )
+
+    user_data = user_response.json()
+
+    github_id = user_data.get("id")
+    username = user_data.get("login")
+
+    if not github_id or not username:
+        return JsonResponse(
+            {"status": "error", "message": "Invalid GitHub user data"},
+            status=400,
+        )
+
+    user, created = PlatformUser.objects.get_or_create(
+        github_id=github_id,
+        defaults={
+            "username": username,
+            "role": "analyst",
+        },
+    )
+
+    if not created:
+        user.username = username
+        user.save()
+
+    access_token = create_access_token(user)
+    refresh_token = create_refresh_token(user)
+
+    return JsonResponse(
+        {
+            "status": "success",
+            "message": "Authentication successful",
+            "data": {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_type": "Bearer",
+                "expires_in": 900,
+                "user": {
+                    "id": str(user.id),
+                    "github_id": user.github_id,
+                    "username": user.username,
+                    "role": user.role,
+                },
+            },
+        }
+    )
+
+
+class TokenRefreshView(APIView):
+    def post(self, request):
+        refresh_token = request.data.get("refresh_token")
+
+        if not refresh_token:
+            return Response(
+                {"status": "error", "message": "Refresh token is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        result = rotate_refresh_token(refresh_token)
+
+        if not result:
+            return Response(
+                {"status": "error", "message": "Invalid or expired refresh token"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        user = result["user"]
 
         return Response(
             {
                 "status": "success",
-                **paginated_result,
+                "message": "Token refreshed successfully",
+                "data": {
+                    "access_token": result["access_token"],
+                    "refresh_token": result["refresh_token"],
+                    "token_type": "Bearer",
+                    "expires_in": 900,
+                    "user": {
+                        "id": str(user.id),
+                        "github_id": user.github_id,
+                        "username": user.username,
+                        "role": user.role,
+                    },
+                },
             },
             status=status.HTTP_200_OK,
         )
+class WebMeView(APIView):
+    authentication_classes = [CookieJWTAuthentication]
+    permission_classes = [IsAnalystOrAdmin]
+
+    def get(self, request):
+        user = request.user
+
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "id": str(user.id),
+                    "github_id": user.github_id,
+                    "username": user.username,
+                    "role": user.role,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class WebLogoutView(APIView):
+    def post(self, request):
+        response = Response(
+            {
+                "status": "success",
+                "message": "Logged out successfully",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+        response.delete_cookie("access_token")
+        response.delete_cookie("refresh_token")
+
+        return response
+
+
+def web_github_login(request):
+    base_url = "https://github.com/login/oauth/authorize"
+
+    redirect_uri = getattr(
+        settings,
+        "WEB_GITHUB_REDIRECT_URI",
+        "http://127.0.0.1:8000/api/v1/web/auth/github/callback/",
+    )
+
+    params = {
+        "client_id": settings.GITHUB_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "scope": "read:user user:email",
+    }
+
+    url = f"{base_url}?{urllib.parse.urlencode(params)}"
+    return redirect(url)
+
+
+def web_github_callback(request):
+    code = request.GET.get("code")
+
+    if not code:
+        return JsonResponse(
+            {"status": "error", "message": "No code provided"},
+            status=400,
+        )
+
+    token_response = requests.post(
+        "https://github.com/login/oauth/access_token",
+        data={
+            "client_id": settings.GITHUB_CLIENT_ID,
+            "client_secret": settings.GITHUB_CLIENT_SECRET,
+            "code": code,
+        },
+        headers={"Accept": "application/json"},
+        timeout=10,
+    )
+
+    token_data = token_response.json()
+    github_access_token = token_data.get("access_token")
+
+    if not github_access_token:
+        return JsonResponse(
+            {"status": "error", "message": "Failed to get GitHub access token"},
+            status=400,
+        )
+
+    user_response = requests.get(
+        "https://api.github.com/user",
+        headers={"Authorization": f"Bearer {github_access_token}"},
+        timeout=10,
+    )
+
+    user_data = user_response.json()
+
+    github_id = user_data.get("id")
+    username = user_data.get("login")
+
+    if not github_id or not username:
+        return JsonResponse(
+            {"status": "error", "message": "Invalid GitHub user data"},
+            status=400,
+        )
+
+    user, created = PlatformUser.objects.get_or_create(
+        github_id=github_id,
+        defaults={
+            "username": username,
+            "role": "analyst",
+        },
+    )
+
+    if not created:
+        user.username = username
+        user.save()
+
+    access_token = create_access_token(user)
+    refresh_token = create_refresh_token(user)
+
+    response = redirect("http://localhost:5173")
+
+    response.set_cookie(
+        "access_token",
+        access_token,
+        httponly=True,
+        secure=False,
+        samesite="Lax",
+        max_age=900,
+    )
+
+    response.set_cookie(
+        "refresh_token",
+        refresh_token,
+        httponly=True,
+        secure=False,
+        samesite="Lax",
+        max_age=60 * 60 * 24 * 7,
+    )
+
+    return response

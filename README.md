@@ -1,197 +1,271 @@
-Profile Intelligence Service API
+# Profile Intelligence Platform (Stage 3)
 
-A backend service that provides intelligent profile insights using stored data, filtering, and natural-language search capabilities.
+## Overview
 
-Built with Django and Django REST Framework.
+The **Profile Intelligence Platform** is a full-stack system that transforms raw name input into enriched profile intelligence using multiple external APIs. It provides secure access via GitHub OAuth, supports role-based permissions, and exposes functionality through three interfaces:
 
-Overview
+* REST API (Backend)
+* CLI Tool
+* Web Portal
 
-This API allows users to:
+The system maintains a single backend source of truth while supporting multiple client interfaces.
 
-- Retrieve stored profile data
-- Filter and sort profiles
-- Perform natural-language search queries on profiles
+---
 
-The service focuses on data retrieval and intelligent querying.
+## System Architecture
 
-Features
+```text
+                ┌───────────────┐
+                │   GitHub OAuth│
+                └──────┬────────┘
+                       │
+        ┌──────────────▼──────────────┐
+        │        Django Backend        │
+        │  (DRF + JWT + RBAC + APIs)  │
+        └──────┬──────────┬───────────┘
+               │          │
+        ┌──────▼───┐  ┌───▼────────┐
+        │   CLI     │  │ Web Portal │
+        │ (Typer)   │  │ (React)    │
+        └───────────┘  └────────────┘
+```
 
-- Retrieve all profiles with pagination
-- Advanced filtering and sorting
-- Natural-language search (e.g., “female adults in US”)
-- Efficient query handling
-- JSON-based API responses
-- Input validation and error handling
+---
 
+## Authentication Flow
 
+### 1. CLI / API Flow (JWT)
 
-Tech Stack
+1. User logs in via GitHub OAuth
+2. Backend returns:
 
-- Django 6.x
-- Django REST Framework
-- SQLite (default) / PostgreSQL (production)
-- Python 3.x
+   * access_token (short-lived)
+   * refresh_token (long-lived)
+3. CLI stores tokens in:
 
-Project Structure
+   ```text
+   ~/.insighta/credentials.json
+   ```
+4. CLI sends requests with:
 
-Profile_Intelligence_Service_API/
+   ```text
+   Authorization: Bearer <token>
+   ```
 
-    profiles/
-        models.py
-        views.py
-        serializers.py
-        urls.py
+---
 
-    config/
-        settings.py
-        urls.py
+### 2. Web Portal Flow (Secure Cookies)
 
-    manage.py
-    db.sqlite3
-    requirements.txt
+1. User clicks login
+2. Redirects to GitHub
+3. GitHub returns `code`
+4. Backend:
 
-Setup Instructions
+   * exchanges code for access token
+   * creates JWT tokens
+   * stores them in HTTP-only cookies
 
-1. Clone Repository
+```text
+access_token → HttpOnly cookie
+refresh_token → HttpOnly cookie
+```
 
-git clone https://github.com/Ebenezer96/Profile_Intelligence_Service_API.git
-cd Profile_Intelligence_Service_API
+5. Frontend makes requests using:
 
-2. Create Virtual Environment
+```js
+axios.get(url, { withCredentials: true })
+```
 
+---
+
+## Token Handling Strategy
+
+* Access token expires in **15 minutes**
+* Refresh token used to generate new access tokens
+* CLI implements **automatic token refresh**
+* Web portal uses cookies (no local storage)
+
+---
+
+## Role-Based Access Control
+
+| Role    | Permissions           |
+| ------- | --------------------- |
+| analyst | View profiles, search |
+| admin   | View, search, export  |
+
+Enforced via custom DRF permission classes.
+
+---
+
+## API Endpoints
+
+### Profiles
+
+```text
+GET /api/v1/profiles/
+GET /api/v1/profiles/search/
+GET /api/v1/profiles/export/
+```
+
+---
+
+### Authentication
+
+```text
+GET /api/v1/auth/github/login/
+POST /api/v1/auth/token/refresh/
+```
+
+---
+
+### Web Auth (Cookies)
+
+```text
+GET /api/v1/web/auth/github/login/
+GET /api/v1/web/auth/github/callback/
+GET /api/v1/web/auth/me/
+POST /api/v1/web/auth/logout/
+```
+
+---
+
+## Natural Language Parsing
+
+The search endpoint converts human queries into structured filters.
+
+Example:
+
+```text
+"female adult in nigeria"
+```
+
+Parsed into:
+
+```json
+{
+  "gender": "female",
+  "age_group": "adult",
+  "country_id": "NG"
+}
+```
+
+This is handled in:
+
+```text
+services.py → parse_natural_language_query()
+```
+
+---
+
+## CLI Usage
+
+### Install
+
+```bash
+pip install -e .
+```
+
+### Commands
+
+```bash
+insighta login
+insighta profiles
+insighta search "female adult in nigeria"
+insighta export
+insighta refresh
+insighta logout
+```
+
+---
+
+## Web Portal Features
+
+* GitHub login
+* Profile dashboard
+* Search functionality
+* CSV export
+* Logout
+
+Uses secure cookie-based authentication.
+
+---
+
+## Rate Limiting
+
+```text
+100 requests per user per day
+```
+
+---
+
+## Request Logging
+
+Logs include:
+
+```text
+method, endpoint, status, user, IP, duration
+```
+
+---
+
+## Setup Instructions
+
+### Backend
+
+```bash
+git clone <repo>
+cd backend_wizard_stage2
 python -m venv venv
 venv\Scripts\activate
-
-3. Install Dependencies
-
 pip install -r requirements.txt
-
-4. Run Migrations
-
 python manage.py migrate
-
-5. Start Server
-
 python manage.py runserver
+```
 
- API Endpoints
+---
 
-Health Check
+### CLI
 
-GET /
+```bash
+cd insighta-cli
+pip install -e .
+```
 
-Response:
+---
 
-{
-  "status": "success",
-  "message": "Profile Intelligence Service is running"
-}
+### Web Portal
 
- Get Profiles
+```bash
+cd insighta-web
+npm install
+npm run dev
+```
 
-GET /api/profiles/
+---
 
-Query Parameters:
+## Project Structure
 
-- gender
-- age_group
-- country_id
-- sort_by
-- order (asc or desc)
-- page
+```text
+backend_wizard_stage2/
+insighta-cli/
+insighta-web/
+```
 
-Example:
+---
 
-GET /api/profiles/?gender=female&country_id=US&sort_by=age&order=desc
+## Features Summary
 
- Search Profiles
-
-GET /api/profiles/search/?q={query}
-
-Examples:
-
-/api/profiles/search/?q=female adults in US
-/api/profiles/search/?q=male teenagers
-
-Description:
-
-The API parses the query and extracts:
-- gender
-- age group
-- country
-
- Data Model
-
-- id (UUID)
-- name (string)
-- gender (string)
-- gender_probability (float)
-- sample_size (integer)
-- age (integer)
-- age_group (string)
-- country_id (string)
-- country_probability (float)
-- created_at (datetime)
-
- Pagination
-
-Example response:
-
-{
-  "count": 100,
-  "next": "...",
-  "previous": "...",
-  "results": [...]
-}
-
-Error Handling
-
-- Invalid query → 400
-- Server error → 500
-
-Example:
-
-{
-  "error": "Invalid query parameter"
-}
-
- Testing
-
-You can test using:
-
-- Postman
-- cURL
-- Browser
-
-Example:
-
-curl http://127.0.0.1:8000/api/profiles/
-
- Deployment
-
-- Use PostgreSQL
-- Set DEBUG=False
-- Configure environment variables
-- Use Gunicorn
-
-Procfile:
-
-web: gunicorn config.wsgi
+* GitHub OAuth authentication
+* JWT + Cookie-based auth
+* Role-based access control
+* CLI + Web integration
+* Natural language search
+* CSV export
+* Rate limiting
+* Request logging
 
 
-Future Improvements
+## Author
 
-- Add POST endpoint
-- Add DELETE endpoint
-- Add external API integration
-- Add authentication (JWT)
-- Add caching
-
- Author
-
-Ebenezer Amakato  
-Backend Developer | ICT Officer
-
- License
-
-This project is for educational and backend practice purposes.
+Ebenezer Amakato
