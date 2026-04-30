@@ -18,10 +18,13 @@ ALLOWED_HOSTS = os.getenv(
     "127.0.0.1,localhost,.railway.app,.up.railway.app,.vercel.app,.onrender.com"
 ).split(",")
 
-CSRF_TRUSTED_ORIGINS = os.getenv(
-    "CSRF_TRUSTED_ORIGINS",
-    "https://*.railway.app,https://*.up.railway.app,https://*.vercel.app,https://*.onrender.com"
-).split(",")
+CSRF_TRUSTED_ORIGINS = [
+    "https://*.railway.app",
+    "https://*.up.railway.app",
+    "https://*.vercel.app",
+    "https://*.onrender.com",
+    "https://insighta-web-omega.vercel.app",
+]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
@@ -44,10 +47,10 @@ INSTALLED_APPS = [
 ]
 
 # =========================
-# MIDDLEWARE (single block only)
+# MIDDLEWARE
 # =========================
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",
+    "corsheaders.middleware.CorsMiddleware",  # MUST BE FIRST
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -126,9 +129,15 @@ STORAGES = {
 }
 
 # =========================
-# CORS
+# CORS (FIXED)
 # =========================
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
+
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOWED_ORIGINS = [
+    "https://insighta-web-omega.vercel.app",
+]
 
 # =========================
 # DJANGO SETTINGS
@@ -142,7 +151,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
-        "rest_framework.renderers.BrowsableAPIRenderer",  # ADD THIS
+        "rest_framework.renderers.BrowsableAPIRenderer",
     ],
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.UserRateThrottle",
