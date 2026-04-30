@@ -1,6 +1,6 @@
 from django.core.paginator import Paginator, EmptyPage
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.shortcuts import redirect
 
 from rest_framework.views import APIView
@@ -99,6 +99,62 @@ class ProfileCollectionView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAnalystOrAdmin]
 
+    def get_age_group(self, age):
+        if age <= 12:
+            return "child"
+        if age <= 19:
+            return "teenager"
+        if age <= 59:
+            return "adult"
+        return "senior"
+
+    def build_profile_data(self, name):
+        gender_response = requests.get(
+            "https://api.genderize.io",
+            params={"name": name},
+            timeout=10,
+        )
+
+        age_response = requests.get(
+            "https://api.agify.io",
+            params={"name": name},
+            timeout=10,
+        )
+
+        country_response = requests.get(
+            "https://api.nationalize.io",
+            params={"name": name},
+            timeout=10,
+        )
+
+        if (
+            gender_response.status_code != 200
+            or age_response.status_code != 200
+            or country_response.status_code != 200
+        ):
+            raise Exception("External API request failed")
+
+        gender_data = gender_response.json()
+        age_data = age_response.json()
+        country_data = country_response.json()
+
+        countries = country_data.get("country", [])
+        top_country = countries[0] if countries else {}
+
+        age = age_data.get("age") or 0
+        country_id = top_country.get("country_id") or "unknown"
+
+        return {
+            "name": name,
+            "gender": gender_data.get("gender") or "unknown",
+            "gender_probability": gender_data.get("probability") or 0,
+            "age": age,
+            "age_group": self.get_age_group(age),
+            "country_id": country_id,
+            "country_name": country_id,
+            "country_probability": top_country.get("probability") or 0,
+        }
+
     def get(self, request):
         serializer = ProfileQuerySerializer(data=request.query_params)
 
@@ -124,6 +180,66 @@ class ProfileCollectionView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+    def post(self, request):
+        name = request.data.get("name")
+
+        if not isinstance(name, str):
+            return Response(
+                {"status": "error", "message": "Invalid type"},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        name = name.strip().lower()
+
+        if not name:
+            return Response(
+                {"status": "error", "message": "Missing or empty name"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_profile = Profile.objects.filter(name=name).first()
+
+        if existing_profile:
+            return Response(
+                {
+                    "status": "success",
+                    "message": "Profile already exists",
+                    "data": ProfileSerializer(existing_profile).data,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        try:
+            profile_data = self.build_profile_data(name)
+
+            allowed_fields = {field.name for field in Profile._meta.fields}
+
+            clean_data = {
+                key: value
+                for key, value in profile_data.items()
+                if key in allowed_fields
+            }
+
+            profile = Profile.objects.create(**clean_data)
+
+            return Response(
+                {
+                    "status": "success",
+                    "message": "Profile created successfully",
+                    "data": ProfileSerializer(profile).data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception:
+            return Response(
+                {
+                    "status": "error",
+                    "message": "Failed to create profile",
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
 
 class ProfileSearchView(APIView):
@@ -209,8 +325,7 @@ class ProfileExportView(APIView):
         queryset = Profile.objects.all()
         queryset = apply_profile_filters(queryset, params)
 
-        response = JsonResponse({}, content_type="text/csv")
-        response.content = b""
+        response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="profiles.csv"'
 
         writer = csv.writer(response)
@@ -383,6 +498,8 @@ class TokenRefreshView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
 class WebMeView(APIView):
     authentication_classes = [CookieJWTAuthentication]
     permission_classes = [IsAnalystOrAdmin]
