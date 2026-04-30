@@ -1,11 +1,11 @@
 from rest_framework.permissions import BasePermission
 
 
-class IsAdmin(BasePermission):
+class IsAdminOrAnalyst(BasePermission):
     def has_permission(self, request, view):
-        return request.user.role == "admin"
+        user = request.user
 
+        if not user or not user.is_authenticated:
+            return False
 
-class IsAnalystOrAdmin(BasePermission):
-    def has_permission(self, request, view):
-        return request.user.role in ["admin", "analyst"]
+        return getattr(user, "role", None) in ["admin", "analyst"]
