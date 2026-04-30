@@ -617,7 +617,7 @@ def web_github_callback(request):
     access_token = create_access_token(user)
     refresh_token = create_refresh_token(user)
 
-    response = redirect("http://localhost:5173")
+    response = redirect("https://insighta-web-omega.vercel.app")
 
     response.set_cookie(
         "access_token",
